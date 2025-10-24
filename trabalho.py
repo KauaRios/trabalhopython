@@ -5,11 +5,13 @@ import pdfplumber
 import requests
 from datetime import datetime
 
+
 def extrair_datas(texto):
     if not texto:
         return []
-    padrao=r'\b\d{4}-\d{2}-\d{2}\b'
+    padrao = r'\b\d{4}-\d{2}-\d{2}\b'
     return re.findall(padrao, texto)
+
 
 def ler_pdf(caminho):
     try:
@@ -23,11 +25,21 @@ def ler_pdf(caminho):
     except Exception as e:
         raise RuntimeError(f"Erro ao ler PDF: {e}")
 
-def atualizar_tabela(datas):
+
+def atualizar_tabela(datas, feriados=None):
     for item in tree.get_children():
         tree.delete(item)
     for data in datas:
-        tree.insert("", "end", values=(data, "Aguardando verificação..."))
+        status = "Aguardando verificação..."
+        if feriados:  # Se feriados for fornecido, verifique se a data é feriado
+            for feriado in feriados:
+                if feriado['date'] == data:
+                    status = "É feriado!"
+                    break
+            else:
+                status = "Não é feriado"
+        tree.insert("", "end", values=(data, status))
+
 
 def selecionar_pdf():
     caminho = filedialog.askopenfilename(filetypes=[("Arquivos PDF", "*.pdf")])
@@ -41,25 +53,26 @@ def selecionar_pdf():
     datas = extrair_datas(texto)
     if not datas:
         messagebox.showinfo("Nenhuma data encontrada", "Nenhuma data foi detectada no PDF.")
-        atualizar_tabela([])
+        atualizar_tabela([], [])
         return
-    datas_unicas = []
-    for d in datas:
-        if d not in datas_unicas:
-            datas_unicas.append(d)
+    datas_unicas = list(set(datas))  # Remover datas duplicadas
     atualizar_tabela(datas_unicas)
     botao_verificar.config(state="normal")
 
-def buscar_feriados_ano(ano):
+
+def buscar_feriados_ano(ano, datas_pdf):
     try:
         url = f"https://date.nager.at/api/v3/PublicHolidays/{ano}/BR"
         resposta = requests.get(url, timeout=10)
         resposta.raise_for_status()
         feriados = resposta.json()
+        feriados_filtrados = []
         print(f"Feriados de {ano}:")
-        for f in feriados[:3]:
-            print(f"  - {f['date']} → {f['localName']}")
-        return feriados
+        for f in feriados:
+            if f['date'] in datas_pdf:
+                print(f"  - {f['date']} → {f['localName']}")
+                feriados_filtrados.append(f)
+        return feriados_filtrados
     except requests.exceptions.RequestException as e:
         messagebox.showerror("Erro de conexão", f"Não foi possível conectar à API:\n{e}")
         return []
@@ -68,11 +81,26 @@ def buscar_feriados_ano(ano):
         return []
 
 
+def verificar_feriados():
+    itens = tree.get_children()
+    if not itens:
+        messagebox.showinfo("Aviso", "Nenhuma data disponível para verificar.")
+        return
+    datas = [tree.item(i)["values"][0] for i in itens]
+    anos = sorted(set(d.split("-")[0] for d in datas))
+    
+    # Buscar os feriados de todos os anos
+    feriados_totais = []
+    for ano in anos:
+        feriados_totais.extend(buscar_feriados_ano(ano, datas))
+    
+    # Atualizar a tabela com o status dos feriados
+    atualizar_tabela(datas, feriados_totais)
 
-janela=tk.Tk()
+
+janela = tk.Tk()
 janela.title("Verificador de Feriados")
 janela.geometry("600x420")
-
 
 frame = ttk.Frame(janela, padding=10)
 frame.pack(fill="both", expand=True)
@@ -87,10 +115,10 @@ for col in cols:
     tree.column(col, anchor="center")
 tree.pack(fill="both", expand=True, pady=8)
 
-botao_verificar = ttk.Button(frame, text="Verificar feriados", command=lambda: messagebox.showinfo("Info", "."), state="disabled")
+botao_verificar = ttk.Button(frame, text="Verificar feriados", command=verificar_feriados, state="disabled")
 botao_verificar.pack(pady=6)
 
-label_info = ttk.Label(frame, text="Formato procurado: YYYY/dd/mm. Clique em 'Selecionar PDF' para começar.")
+label_info = ttk.Label(frame, text="Formato procurado: YYYY-MM-DD. Clique em 'Selecionar PDF' para começar.")
 label_info.pack(pady=4)
 
 janela.mainloop()
